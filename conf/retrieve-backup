@@ -1,0 +1,232 @@
+#!/usr/bin/env bash
+#
+# Bridge between the Borg repository and YunoHost's local backup storage.
+#
+#   retrieve-backup list                 List the archives of the repository (`borg list --json` output)
+#   retrieve-backup choices [FILE|-]     Same, formatted as YAML choices for the config panel select.
+#                                        FILE (or - for stdin) holds a previous `list` output.
+#   retrieve-backup retrieve ARCHIVE     Materialize a Borg archive as a regular local YunoHost backup
+#
+# `retrieve` exports the archive as /home/yunohost.backup/archives/<name>.tar, next to the
+# <name>.info.json sidecar YunoHost keeps for its own archives. The backup then shows up in
+# "Backups > Local storage" and is restored with the native workflow (`yunohost backup restore`).
+# Nothing is restored by this script.
+#
+# The archives created by the backup_method hook already have the layout of a YunoHost backup
+# (info.json, backup.csv, apps/, conf/, data/, hooks/): YunoHost organizes the files in the
+# working directory before `borg create` is run from there, so `borg export-tar` gives back a
+# tar identical to the ones YunoHost creates itself.
+
+set -Eeuo pipefail
+
+app="__APP__"
+borg="__INSTALL_DIR__/venv/bin/borg"
+# Where YunoHost looks for local backups (ARCHIVES_PATH in yunohost's src/backup.py).
+# Only meant to be overridden by the test suite.
+archives_dir="${BORG_YNH_ARCHIVES_DIR:-/home/yunohost.backup/archives}"
+# One lock for all Borg instances: they share the archives directory (and its temporary files)
+lock_file="/run/lock/borg-ynh-retrieve-backup.lock"
+# Same safety margin as YunoHost's own free space checks (APP_MARGIN_SPACE_SIZE)
+margin_bytes=$((100 * 1024 * 1024))
+
+tmp_dir=""
+sidecar=""
+final_tar=""
+retrieval_done=0
+
+set -a
+# shellcheck disable=SC1091
+source "__INSTALL_DIR__/.env"
+set +a
+
+usage() {
+    cat << EOF
+Usage:
+  $0 list                 List the archives of the Borg repository (JSON)
+  $0 choices [FILE|-]     List the archives as YAML choices for the config panel
+  $0 retrieve ARCHIVE     Copy a Borg archive into YunoHost's local backups
+EOF
+}
+
+die() {
+    echo "Error: $*" >&2
+    exit 1
+}
+
+# Progress messages go to stdout: the config panel forwards them to the admin
+info() {
+    echo "$*"
+}
+
+human() {
+    numfmt --to=iec-i --suffix=B "$1"
+}
+
+# Same behaviour as the backup_method hook: trust the remote host key on first connection,
+# otherwise a fresh install (the disaster recovery scenario) could never reach the repository.
+setup_ssh_host_key_policy() {
+    local server
+    server=$(yunohost app setting "$app" "server")
+    if [[ -n "$server" ]] && ! ssh-keygen -F "$server" > /dev/null; then
+        export BORG_RSH="${BORG_RSH/oStrictHostKeyChecking=yes/oStrictHostKeyChecking=no}"
+    fi
+}
+
+list_archives() {
+    "$borg" list --json
+}
+
+# Turns `borg list --json` into the YAML a config panel getter returns for a `select`:
+# system parts first, then apps alphabetically, most recent first within each component.
+read -r -d '' choices_py << 'EOF' || true
+import json
+import re
+import sys
+
+import yaml
+
+# Archive names are "<yunohost backup name>-<borg {now} placeholder>", see the backup_method hook
+NOW_SUFFIX = re.compile(r"-\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$")
+SYSTEM_PARTS = {"conf": "System configuration", "data": "System data"}
+
+raw = sys.stdin.read()
+archives = json.loads(raw).get("archives", []) if raw.strip() else []
+entries = []
+for archive in archives:
+    base = NOW_SUFFIX.sub("", archive["name"])
+    if base.startswith("auto_"):
+        component = base[len("auto_"):]
+        group = 0 if component in SYSTEM_PARTS else 1
+        label = SYSTEM_PARTS.get(component, component)
+    else:
+        group, label = 2, base
+    when = archive["time"][:19].replace("T", " ")
+    entries.append((group, label.lower(), when, archive["name"], f"{label}: {when}"))
+
+entries.sort(key=lambda entry: entry[2], reverse=True)
+entries.sort(key=lambda entry: (entry[0], entry[1]))
+choices = {name: label for _, _, _, name, label in entries}
+print(yaml.safe_dump({"value": "", "choices": choices}, allow_unicode=True, sort_keys=False, width=float("inf")), end="")
+EOF
+
+print_choices() {
+    local source="${1:-}"
+    if [[ -z "$source" ]]; then
+        list_archives | python3 -c "$choices_py"
+    elif [[ "$source" == "-" ]]; then
+        python3 -c "$choices_py"
+    else
+        python3 -c "$choices_py" < "$source"
+    fi
+}
+
+# YunoHost backup names must match ^[\w\-\._]{1,50}(?<!\.)$ (see yunohost's share/actionsmap.yml):
+# the colons of borg's {now} placeholder have to go, or `yunohost backup delete` would refuse the archive.
+local_name_for() {
+    local name="${1//:/-}"
+    name=$(printf '%s' "$name" | tr -c 'A-Za-z0-9_.-' '_')
+    name="${name:0:50}"
+    name="${name%"${name##*[!.]}"}"
+    [[ -n "$name" ]] || die "Cannot derive a local backup name from '$1'"
+    echo "$name"
+}
+
+cleanup() {
+    local rc=$?
+    if (( retrieval_done == 0 )); then
+        [[ -z "$sidecar" ]] || rm -f "$sidecar"
+        [[ -z "$final_tar" ]] || rm -f "$final_tar"
+    fi
+    [[ -z "$tmp_dir" ]] || rm -rf "$tmp_dir"
+    exit "$rc"
+}
+
+borg_failed() {
+    [[ ! -s "$tmp_dir/borg.err" ]] || cat "$tmp_dir/borg.err" >&2
+    die "Borg could not $1. See the messages above: the repository may be unreachable or locked by a running backup, or the archive may be damaged (run 'borg check --verify-data' to know more)."
+}
+
+retrieve_archive() {
+    local archive="$1"
+    local local_name
+    local_name=$(local_name_for "$archive")
+
+    exec 9> "$lock_file"
+    flock -n 9 || die "Another retrieval is already in progress, wait for it to complete."
+
+    if [[ ! -d "$archives_dir" ]]; then
+        # Same mode and group as YunoHost's _create_archive_dir()
+        mkdir -p "$archives_dir"
+        chmod 0770 "$archives_dir"
+        chgrp admins "$archives_dir" 2> /dev/null || true
+    fi
+
+    local existing
+    for existing in "$archives_dir/$local_name.tar" "$archives_dir/$local_name.tar.gz"; do
+        if [[ -e "$existing" || -L "$existing" ]]; then
+            die "A local backup named '$local_name' already exists and won't be overwritten. Delete or rename it first (Backups > Local storage) to retrieve '$archive' again."
+        fi
+    done
+
+    # Leftovers of a previous retrieval that got killed: safe to remove since we hold the lock
+    rm -rf "$archives_dir"/.retrieve-*
+    tmp_dir=$(mktemp -d "$archives_dir/.retrieve-XXXXXX")
+    trap cleanup EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+
+    info "Checking archive '$archive'..."
+    local info_json rc=0
+    info_json=$("$borg" extract --stdout "::$archive" info.json 2> "$tmp_dir/borg.err") || rc=$?
+    (( rc < 2 )) || borg_failed "read archive '$archive'"
+    if [[ -z "$info_json" ]] || ! jq -e '.created_at and .from_yunohost_version' <<< "$info_json" > /dev/null 2>&1; then
+        die "Archive '$archive' is not a YunoHost backup (no valid info.json): it cannot be restored through YunoHost."
+    fi
+
+    local size available needed
+    size=$("$borg" info --json "::$archive" 2> "$tmp_dir/borg.err" | jq -r '.archives[0].stats.original_size') || borg_failed "read the size of archive '$archive'"
+    [[ "$size" =~ ^[0-9]+$ ]] || size=0
+    # The tar is not compressed: original size plus some room for tar headers, plus YunoHost's usual margin
+    needed=$(( size + size / 20 + margin_bytes ))
+    available=$(df -P -B1 "$archives_dir" | awk 'NR == 2 { print $4 }')
+    (( available >= needed )) || die "Not enough free space to retrieve '$archive': $(human "$needed") needed but only $(human "$available") available in $archives_dir."
+
+    info "Exporting archive '$archive' ($(human "$size")) as '$local_name.tar', this can take a while..."
+    # Borg warnings (exit code 1) are treated as failures too: a backup with missing files is worse than no backup
+    "$borg" export-tar "::$archive" "$tmp_dir/$local_name.tar" 2> "$tmp_dir/borg.err" || borg_failed "export archive '$archive' without errors"
+    tar -tf "$tmp_dir/$local_name.tar" info.json > /dev/null || die "The exported archive is unreadable or incomplete, nothing was kept."
+
+    sidecar="$archives_dir/$local_name.info.json"
+    final_tar="$archives_dir/$local_name.tar"
+    printf '%s\n' "$info_json" > "$tmp_dir/info.json"
+    mv "$tmp_dir/info.json" "$sidecar"
+    # Last step on purpose: YunoHost lists local backups from the .tar files, so a half-done retrieval never shows up
+    mv "$tmp_dir/$local_name.tar" "$final_tar"
+
+    if ! yunohost backup info "$local_name" > /dev/null 2> "$tmp_dir/yunohost.err"; then
+        cat "$tmp_dir/yunohost.err" >&2
+        die "YunoHost does not recognize the retrieved backup '$local_name', it has been removed."
+    fi
+    retrieval_done=1
+    info "Backup '$local_name' is now available in Backups > Local storage. Restore it from there, or with: yunohost backup restore $local_name"
+}
+
+case "${1:-}" in
+    list)
+        setup_ssh_host_key_policy
+        list_archives
+        ;;
+    choices)
+        [[ -n "${2:-}" ]] || setup_ssh_host_key_policy
+        print_choices "${2:-}"
+        ;;
+    retrieve)
+        [[ -n "${2:-}" ]] || die "Missing archive name. $(usage)"
+        setup_ssh_host_key_policy
+        retrieve_archive "$2"
+        ;;
+    *)
+        usage >&2
+        exit 1
+        ;;
+esac

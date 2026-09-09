@@ -37,17 +37,34 @@ Then run for example:
 
 ## Restoring archives from Borg
 
-A borg "archive" can be exported to a `.tar` which can then be restored using the classic Yunohost backup restore workflow:
+Restoring happens in two steps: a Borg archive is first *retrieved*, that is copied to the local backups of YunoHost (`/home/yunohost.backup/archives/`), then it is restored with the classic YunoHost backup restore workflow. Nothing is restored during the retrieval, and existing local backups are never overwritten.
 
-As root, run (replace `ARCHIVE_NAME` by the relevant backup name and `BORG_APP` by `borg`, or `borg__2`, `backup__3`, ...):
+### From the webadmin
+
+In `Web Admin > Applications > Borg > Config panel > Restore backups`, pick the backup to retrieve (one entry per app or system part, and per date), then click *Retrieve backup*. Once done, the backup is listed in `Web Admin > Backups > Local storage`, where you can restore it as usual.
+
+### From the command line
+
+As root (replace `BORG_APP` by `borg`, or `borg__2`, `borg__3`, ...):
+
 ```bash
-/var/www/BORG_APP/wrapper/borg export-tar "::ARCHIVE_NAME" /home/yunohost.backup/archives/ARCHIVE_NAME.tar
-
+# List the archives of the repository (JSON)
+/var/www/BORG_APP/retrieve-backup list
+# Retrieve one of them
+/var/www/BORG_APP/retrieve-backup retrieve ARCHIVE_NAME
 ```
 
-Then restore using the classic workflow:
-- from the command line: `yunohost backup restore ARCHIVE_NAME`
+The same action is also available through the config panel API, which is handy for scripting: `yunohost app action run BORG_APP restore.retrieve.retrieve_backup --args "restore_archive=ARCHIVE_NAME"`.
+
+The local backup gets the name of the Borg archive, except that the characters YunoHost does not accept in backup names are replaced (typically the colons of the timestamp: `auto_nextcloud-2026-09-08T03:17:00` becomes `auto_nextcloud-2026-09-08T03-17-00`). Then restore using the classic workflow:
+- from the command line: `yunohost backup restore LOCAL_NAME`
 - or in the webadmin > Backups
+
+Alternatively, the export can still be done by hand with `borg export-tar` (which is what the retrieval does, along with a few checks):
+
+```bash
+/var/www/BORG_APP/wrapper/borg export-tar "::ARCHIVE_NAME" /home/yunohost.backup/archives/LOCAL_NAME.tar
+```
 
 ### Restoring the "source+config" of the app, and its data separately
 

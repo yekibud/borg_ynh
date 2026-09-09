@@ -185,3 +185,34 @@ name.fr = "Liste des dernières sauvegardes"
         [list.list.last_backups]
         ask = ""
         type = "markdown"
+
+[restore]
+name.en = "Restore backups"
+name.fr = "Restaurer des sauvegardes"
+
+    [restore.retrieve]
+    name.en = "Retrieve a backup from the Borg repository"
+    name.fr = "Récupérer une sauvegarde depuis le dépôt Borg"
+    help.en = "Retrieving a backup copies it from the Borg repository to the local backups of YunoHost (**Backups > Local storage**). From there, restore it with the usual YunoHost workflow. Nothing is restored at this step, and existing local backups are never overwritten."
+    help.fr = "Récupérer une sauvegarde la copie depuis le dépôt Borg vers les sauvegardes locales de YunoHost (**Sauvegardes > Stockage local**). Restaurez-la ensuite avec le processus habituel de YunoHost. Rien n'est restauré à cette étape, et les sauvegardes locales existantes ne sont jamais écrasées."
+
+        [restore.retrieve.restore_status]
+        ask = "Borg repository status"
+        type = "alert"
+        style = "info"
+
+        [restore.retrieve.restore_archive]
+        ask.en = "Backup to retrieve"
+        ask.fr = "Sauvegarde à récupérer"
+        type = "select"
+        optional = false
+        help.en = "One entry per component (system configuration, system data, or app) and per date."
+        help.fr = "Une entrée par composant (configuration système, données système ou application) et par date."
+
+        [restore.retrieve.retrieve_backup]
+        ask.en = "Retrieve backup"
+        ask.fr = "Récupérer la sauvegarde"
+        type = "button"
+        style = "success"
+        icon = "download"
+        enabled = "restore_archive"

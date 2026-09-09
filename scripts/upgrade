@@ -119,6 +119,11 @@ ynh_config_add --template="borg_wrapper" --destination="$install_dir/wrapper/bor
 chmod 0550 "$install_dir/wrapper/borg"
 chown "root:$app" "$install_dir/wrapper/borg"
 
+# Only root retrieves archives into the local YunoHost backups (from the config panel or the command line)
+ynh_config_add --template="retrieve-backup" --destination="$install_dir/retrieve-backup"
+chmod 0500 "$install_dir/retrieve-backup"
+chown "root:root" "$install_dir/retrieve-backup"
+
 #=================================================
 # REAPPLY SYSTEM CONFIGURATIONS
 #=================================================

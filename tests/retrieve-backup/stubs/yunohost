@@ -1,0 +1,93 @@
+#!/usr/bin/env python3
+"""Stand-in for the `yunohost` CLI, used by tests/retrieve-backup/run.sh.
+
+Reproduces the archive discovery rules of yunohost's src/backup.py (backup_list / backup_info):
+local backups are the *.tar and *.tar.gz files of the archives directory, and their metadata
+comes from the <name>.info.json sidecar or, failing that, from the info.json inside the tar.
+"""
+
+import glob
+import json
+import os
+import sys
+import tarfile
+
+archives_dir = os.environ["BORG_YNH_ARCHIVES_DIR"]
+settings_file = os.environ.get("YNH_STUB_SETTINGS")
+
+
+def fail(message):
+    print(f"Error: {message}", file=sys.stderr)
+    sys.exit(1)
+
+
+def strip_extension(path):
+    name = os.path.basename(path)
+    return name[: -len(".tar.gz")] if name.endswith(".tar.gz") else name[: -len(".tar")]
+
+
+def backup_list():
+    archives = glob.glob(f"{archives_dir}/*.tar.gz") + glob.glob(f"{archives_dir}/*.tar")
+    archives = {os.path.realpath(archive) for archive in archives}
+    archives = sorted(archive for archive in archives if os.path.exists(archive))
+    return {"archives": [strip_extension(archive) for archive in archives]}
+
+
+def backup_info(name):
+    if os.environ.get("YNH_STUB_FAIL_INFO"):
+        fail("simulated failure of 'yunohost backup info'")
+
+    archive_file = f"{archives_dir}/{name}.tar"
+    if not os.path.lexists(archive_file):
+        archive_file += ".gz"
+        if not os.path.lexists(archive_file):
+            fail(f"backup_archive_name_unknown: {name}")
+
+    info_file = f"{archives_dir}/{name}.info.json"
+    if not os.path.exists(info_file):
+        with tarfile.open(archive_file) as tar:
+            names = tar.getnames()
+            member = next((m for m in ("info.json", "./info.json") if m in names), None)
+            if member is None:
+                fail(f"backup_archive_cant_retrieve_info_json: {archive_file}")
+            with tar.extractfile(member) as source, open(info_file, "wb") as target:
+                target.write(source.read())
+
+    with open(info_file) as f:
+        info = json.load(f)
+    return {
+        "path": archive_file,
+        "created_at": info["created_at"],
+        "description": info["description"],
+        "size": info.get("size", 0),
+    }
+
+
+def app_setting(key):
+    settings = {}
+    if settings_file and os.path.exists(settings_file):
+        with open(settings_file) as f:
+            settings = json.load(f)
+    value = settings.get(key)
+    return "" if value is None else str(value)
+
+
+# Drop the global "--output-as FORMAT" option, everything is printed as JSON anyway
+args = []
+skip_next = False
+for arg in sys.argv[1:]:
+    if skip_next:
+        skip_next = False
+    elif arg == "--output-as":
+        skip_next = True
+    elif not arg.startswith("--output-as="):
+        args.append(arg)
+
+if args[:2] == ["backup", "list"]:
+    print(json.dumps(backup_list()))
+elif args[:2] == ["backup", "info"] and len(args) == 3:
+    print(json.dumps(backup_info(args[2])))
+elif args[:2] == ["app", "setting"] and len(args) == 4:
+    print(app_setting(args[3]))
+else:
+    fail(f"unsupported command in stub: {' '.join(sys.argv[1:])}")

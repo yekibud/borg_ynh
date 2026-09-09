@@ -44,6 +44,10 @@ chown -R "root:$app" "$install_dir/wrapper"
 chmod 0550 "$install_dir/wrapper/borg"
 chown "root:$app" "$install_dir/wrapper/borg"
 
+ynh_restore "$install_dir/retrieve-backup"
+chmod 0500 "$install_dir/retrieve-backup"
+chown "root:root" "$install_dir/retrieve-backup"
+
 #=================================================
 # RESTORE SYSTEM CONFIGURATIONS
 #=================================================

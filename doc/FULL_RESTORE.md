@@ -61,13 +61,13 @@ In `yuno` now, you should be able to list backups in `rem` with the following co
 /var/www/borg/wrapper/borg list
 ```
 
-You can then reimport one to `yuno` with:
+You can then reimport one to `yuno` with (this can also be done from the webadmin, in the *Restore backups* tab of the Borg config panel):
 
 ```bash
-/var/www/borg/wrapper/borg export-tar ::auto_BACKUP_NAME /home/yunohost.backup/archives/auto_BACKUP_NAME.tar.gz
+/var/www/borg/retrieve-backup retrieve auto_BACKUP_NAME
 ```
 
-And then restore the archive in `yuno` with:
+The local copy is named after the Borg archive, with the colons of the timestamp replaced by dashes (the name is printed at the end of the retrieval). Then restore the archive in `yuno` with:
 
 ```bash
 yunohost backup restore auto_BACKUP_NAME --system # for config and data backups
