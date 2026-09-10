@@ -55,13 +55,13 @@ archives_json=$("$retrieve_backup" list)
 archive=$(jq -r --arg prefix "auto_${test_app}-" '.archives | map(select(.name | startswith($prefix))) | sort_by(.time) | last | .name' <<< "$archives_json")
 [[ -n "$archive" && "$archive" != "null" ]] || die "no archive of $test_app found in $(jq -c '.archives[].name' <<< "$archives_json")"
 echo "Archive of $test_app: $archive"
-"$retrieve_backup" choices - <<< "$archives_json" | grep -F "$archive" > /dev/null || die "the archive is missing from the config panel choices"
+archive_date=${archive: -19:10}
 
 step "Simulating data loss"
 rm -f "$app_install_dir/e2e-marker.txt"
 
 step "Retrieving the archive through the config panel action"
-yunohost app action run "$borg_app" restore.retrieve.retrieve_backup --args "restore_archive=$archive"
+yunohost app action run "$borg_app" restore.retrieve.retrieve_backup --args "restore_components=$test_app&restore_dates=$archive_date"
 local_name=${archive//:/-}
 yunohost backup list --output-as json | jq -e --arg name "$local_name" '.archives | index($name)' > /dev/null \
     || die "$local_name is not listed by 'yunohost backup list'"
@@ -71,7 +71,7 @@ echo "Local backup: $local_name"
 
 step "Retrieving it again must fail without touching the existing local backup"
 checksum=$(sha256sum "/home/yunohost.backup/archives/$local_name.tar")
-if yunohost app action run "$borg_app" restore.retrieve.retrieve_backup --args "restore_archive=$archive"; then
+if yunohost app action run "$borg_app" restore.retrieve.retrieve_backup --args "restore_components=$test_app&restore_dates=$archive_date"; then
     die "the duplicate retrieval should have failed"
 fi
 [[ "$checksum" == "$(sha256sum "/home/yunohost.backup/archives/$local_name.tar")" ]] || die "the existing local backup was modified"

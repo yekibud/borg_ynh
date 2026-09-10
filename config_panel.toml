@@ -175,44 +175,53 @@ name.fr = "Paramètres avancés"
         pattern.error = 'The interval should be of the following form: “<integer><character>”, where char is “H” (hourly), “d” (daily), “w” (weekly), “m” (monthly), “y” (yearly).'
         visible = "pruning_enabled"
 
-[list]
-name.en = "Last backups list"
-name.fr = "Liste des dernières sauvegardes"
-
-    [list.list]
-    name = ""
-
-        [list.list.last_backups]
-        ask = ""
-        type = "markdown"
-
 [restore]
 name.en = "Restore backups"
 name.fr = "Restaurer des sauvegardes"
 
     [restore.retrieve]
-    name.en = "Retrieve a backup from the Borg repository"
-    name.fr = "Récupérer une sauvegarde depuis le dépôt Borg"
-    help.en = "Retrieving a backup copies it from the Borg repository to the local backups of YunoHost (**Backups > Local storage**). From there, restore it with the usual YunoHost workflow. Nothing is restored at this step, and existing local backups are never overwritten."
-    help.fr = "Récupérer une sauvegarde la copie depuis le dépôt Borg vers les sauvegardes locales de YunoHost (**Sauvegardes > Stockage local**). Restaurez-la ensuite avec le processus habituel de YunoHost. Rien n'est restauré à cette étape, et les sauvegardes locales existantes ne sont jamais écrasées."
+    name.en = "Retrieve backups from the Borg repository"
+    name.fr = "Récupérer des sauvegardes depuis le dépôt Borg"
+    help.en = "Pick components and dates, then retrieve every backup matching that combination. Retrieving copies backups from the Borg repository to the local backups of YunoHost (**Backups > Local storage**), where you restore them with the usual YunoHost workflow. Nothing is restored at this step, and existing local backups are never overwritten."
+    help.fr = "Choisissez des composants et des dates, puis récupérez toutes les sauvegardes correspondantes. La récupération copie les sauvegardes du dépôt Borg vers les sauvegardes locales de YunoHost (**Sauvegardes > Stockage local**), où vous les restaurez avec le processus habituel. Rien n'est restauré à cette étape, et les sauvegardes locales existantes ne sont jamais écrasées."
 
         [restore.retrieve.restore_status]
         ask = "Borg repository status"
         type = "alert"
         style = "info"
 
-        [restore.retrieve.restore_archive]
-        ask.en = "Backup to retrieve"
-        ask.fr = "Sauvegarde à récupérer"
-        type = "select"
+        [restore.retrieve.restore_components]
+        ask.en = "Components"
+        ask.fr = "Composants"
+        type = "tags"
         optional = false
-        help.en = "One entry per component (system configuration, system data, or app) and per date."
-        help.fr = "Une entrée par composant (configuration système, données système ou application) et par date."
+        icon = "cube"
+        placeholder = "Add a component"
+        help.en = "All components are preselected. Remove the ones you don't need, or leave them and simply choose a date to retrieve a whole night."
+        help.fr = "Tous les composants sont présélectionnés. Retirez ceux dont vous n'avez pas besoin, ou laissez-les et choisissez simplement une date pour récupérer toute une nuit."
+
+        [restore.retrieve.restore_dates]
+        ask.en = "Dates"
+        ask.fr = "Dates"
+        type = "tags"
+        optional = false
+        icon = "calendar"
+        placeholder = "Add a date"
+        help.en = "Nothing is selected by default, so choose at least one date."
+        help.fr = "Rien n'est sélectionné par défaut, choisissez donc au moins une date."
 
         [restore.retrieve.retrieve_backup]
-        ask.en = "Retrieve backup"
-        ask.fr = "Récupérer la sauvegarde"
+        ask.en = "Retrieve backups"
+        ask.fr = "Récupérer les sauvegardes"
         type = "button"
         style = "success"
         icon = "download"
-        enabled = "restore_archive"
+
+    [restore.archives]
+    name.en = "All archives in the repository"
+    name.fr = "Toutes les archives du dépôt"
+    collapsed = true
+
+        [restore.archives.last_backups]
+        ask = ""
+        type = "markdown"

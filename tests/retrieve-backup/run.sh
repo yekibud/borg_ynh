@@ -141,38 +141,6 @@ run_script list
 check "list exits 0" test "$rc" -eq 0
 check "list returns 8 archives as JSON" test "$(jq '.archives | length' <<< "$out")" -eq 8
 
-run_script choices - <<< "$out"
-check "choices exits 0" test "$rc" -eq 0
-python3 - "$out" << 'EOF' || fail "choices YAML content"
-import sys
-import yaml
-
-data = yaml.safe_load(sys.argv[1])
-assert data["value"] == "", data
-choices = data["choices"]
-keys = list(choices)
-expected_order = [
-    "auto_conf-2026-09-02T03:05:00",
-    "auto_" + "a" * 40 + "-2026-09-03T01:02:03",
-    "auto_hextris-2026-09-02T03:00:00",
-    "auto_hextris-2026-09-01T03:00:00",
-    "auto_wordpress-2026-09-02T03:01:00",
-]
-assert keys[:5] == expected_order, keys
-assert choices["auto_conf-2026-09-02T03:05:00"] == "System configuration: 2026-09-02 03:05:00", choices
-assert choices["auto_hextris-2026-09-02T03:00:00"] == "hextris: 2026-09-02 03:00:00", choices
-assert choices["before_upgrade-2026-08-01T10:00:00"] == "before_upgrade: 2026-08-01 10:00:00", choices
-assert set(keys[5:]) == {
-    "before_upgrade-2026-08-01T10:00:00",
-    "not_yunohost-2026-09-02T04:00:00",
-    "weird name+with@chars-2026-09-03T01:02:03",
-}, keys
-print("  ok   - choices are grouped by component, most recent first, with friendly labels")
-EOF
-
-run_script choices - < /dev/null
-check "choices with an empty list is valid YAML with no choice" test "$out" == $'value: \'\'\nchoices: {}'
-
 #=================================================
 # RETRIEVAL
 #=================================================

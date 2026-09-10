@@ -12,13 +12,13 @@ If you want to test correct Borg Apps setup before scheduled time, you can start
 systemctl start borg
 ```
 
-Once the backup completes, you can check that a backup is listed in the panel `Web Admin > Applications > Borg > 'Last backups list'`.
+Once the backup completes, you can check that a backup is listed in `Web Admin > Applications > Borg > Restore backups`, under *All archives in the repository*.
 
 If you have a shell session, you will find more details on borg execution logs in `/var/log/borg/borg.log`
 
 ## Manually running `borg` commands
 
-The config panel has a "Last backup list" that allow to have quick look at the recently created backup archives.
+The config panel's *Restore backups* tab lists the recently created backup archives, under *All archives in the repository*.
 
 However, you may want to manually inspect that the backups are indeed made regularly and contain the expected content.
 
@@ -41,7 +41,9 @@ Restoring happens in two steps: a Borg archive is first *retrieved*, that is cop
 
 ### From the webadmin
 
-In `Web Admin > Applications > Borg > Config panel > Restore backups`, pick the backup to retrieve (one entry per app or system part, and per date), then click *Retrieve backup*. Once done, the backup is listed in `Web Admin > Backups > Local storage`, where you can restore it as usual.
+In `Web Admin > Applications > Borg > Restore backups`, choose the components and the dates you want, then click *Retrieve backups*. Every archive matching that combination is retrieved. All components start selected, so choosing a single date retrieves that whole night; remove the ones you don't need to narrow it down. Once done, the backups are listed in `Web Admin > Backups > Local storage`, where you restore them as usual.
+
+Note that the dates come from the archive names, which carry the local time of the server that made the backup. That is the same string you see in the archive list, but it can differ from UTC.
 
 ### From the command line
 
@@ -54,7 +56,12 @@ As root (replace `BORG_APP` by `borg`, or `borg__2`, `borg__3`, ...):
 /var/www/BORG_APP/retrieve-backup retrieve ARCHIVE_NAME
 ```
 
-The same action is also available through the config panel API, which is handy for scripting: `yunohost app action run BORG_APP restore.retrieve.retrieve_backup --args "restore_archive=ARCHIVE_NAME"`.
+The same action is available through the config panel API, which is handy for scripting:
+
+```bash
+yunohost app action run BORG_APP restore.retrieve.retrieve_backup \
+    --args "restore_components=nextcloud,conf&restore_dates=2026-09-08"
+```
 
 The local backup gets the name of the Borg archive, except that the characters YunoHost does not accept in backup names are replaced (typically the colons of the timestamp: `auto_nextcloud-2026-09-08T03:17:00` becomes `auto_nextcloud-2026-09-08T03-17-00`). Then restore using the classic workflow:
 - from the command line: `yunohost backup restore LOCAL_NAME`

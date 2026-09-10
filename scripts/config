@@ -136,15 +136,91 @@ $(sed 's/^/    /' <<< "$message_fr")
 EOF
 }
 
-get__restore_archive() {
-    _load_borg_archives
+# One python program serves the archive-derived options, so the grouping rules live in one place.
+# It reads `borg list --json` on stdin. Choices for a "tags" option must be a flat list of strings
+# (TagsOption.choices is typed list[str] and every submitted value is checked against it), which is
+# why the component ids and the dates are used verbatim rather than carrying friendlier labels.
+read -r -d '' _archive_py << 'PYEOF' || true
+import json
+import os
+import re
+import sys
 
-    if [ -z "$borg_archives_json" ]; then
-        echo 'value: ""'
-        echo 'choices: {}'
-    else
-        "$retrieve_backup" choices - <<< "$borg_archives_json"
-    fi
+import yaml
+
+NOW_SUFFIX = re.compile(r"-\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$")
+SYSTEM_PARTS = ("conf", "data")
+
+mode = sys.argv[1]
+raw = sys.stdin.read()
+archives = json.loads(raw).get("archives", []) if raw.strip() else []
+
+rows = []
+for archive in archives:
+    base = NOW_SUFFIX.sub("", archive["name"])
+    if base.startswith("auto_"):
+        component = base[len("auto_"):]
+        group = 0 if component in SYSTEM_PARTS else 1
+    else:
+        component, group = base, 2
+    # The {now} placeholder in the name is the producing server's local time, while borg's `time`
+    # field is rendered in *this* machine's timezone. Users match on the name, so the name wins.
+    stamp = NOW_SUFFIX.search(archive["name"])
+    rows.append({
+        "component": component,
+        "group": group,
+        "day": stamp.group(0)[1:11] if stamp else archive["time"][:10],
+        "time": archive["time"],
+        "name": archive["name"],
+    })
+
+
+def ordered_components():
+    seen = {}
+    for row in rows:
+        seen[(row["group"], row["component"].lower(), row["component"])] = True
+    return [key[2] for key in sorted(seen)]
+
+
+def emit(data):
+    print(yaml.safe_dump(data, default_flow_style=False, sort_keys=False, width=10000), end="")
+
+
+if mode == "components":
+    components = ordered_components()
+    # Every component is preselected, so picking a date alone retrieves that whole night
+    emit({"value": ",".join(components), "choices": components})
+
+elif mode == "dates":
+    emit({"value": "", "choices": sorted({row["day"] for row in rows}, reverse=True)})
+
+elif mode == "resolve":
+    wanted_components = {c for c in os.environ.get("SELECTED_COMPONENTS", "").split(",") if c}
+    wanted_dates = {d for d in os.environ.get("SELECTED_DATES", "").split(",") if d}
+    matching = [
+        row for row in rows
+        if row["component"] in wanted_components and row["day"] in wanted_dates
+    ]
+    matching.sort(key=lambda row: row["time"], reverse=True)
+    matching.sort(key=lambda row: (row["group"], row["component"].lower()))
+    for row in matching:
+        print(row["name"])
+
+elif mode == "counts":
+    print(len(rows))
+PYEOF
+
+_archives_yaml() {
+    _load_borg_archives
+    python3 -c "$_archive_py" "$1" <<< "$borg_archives_json"
+}
+
+get__restore_components() {
+    _archives_yaml components
+}
+
+get__restore_dates() {
+    _archives_yaml dates
 }
 
 #=================================================
@@ -199,13 +275,38 @@ set__remote_path() {
 #=================================================
 
 run__retrieve_backup() {
-    if [ -z "${restore_archive:-}" ]; then
-        ynh_die "Select the backup to retrieve first."
+    if [ -z "${restore_components:-}" ] || [ -z "${restore_dates:-}" ]; then
+        ynh_die "Pick at least one component and at least one date."
     fi
 
-    # The script's progress messages go through the same channel as ynh_print_info, so the admin sees them live
-    if ! "$retrieve_backup" retrieve "$restore_archive" >&"${YNH_STDINFO:-1}"; then
-        ynh_die "Could not retrieve '$restore_archive', see the messages above."
+    # The getters' cache belongs to the "show" run, so the archive list is fetched once here
+    local listing archives=() failed=() retrieved=() archive
+    if ! listing=$("$retrieve_backup" list 2>&1); then
+        ynh_die "Could not list the Borg repository: $(tail -n 5 <<< "$listing")"
+    fi
+
+    mapfile -t archives < <(SELECTED_COMPONENTS="$restore_components" SELECTED_DATES="$restore_dates" \
+        python3 -c "$_archive_py" resolve <<< "$listing")
+
+    if [ ${#archives[@]} -eq 0 ]; then
+        ynh_die "No backup matches that combination of components and dates."
+    fi
+
+    ynh_print_info "${#archives[@]} backups match; retrieving them one by one."
+
+    # One archive failing shouldn't abandon the others: report everything at the end
+    for archive in "${archives[@]}"; do
+        [ -n "$archive" ] || continue
+        # Progress messages go through the same channel as ynh_print_info, so the admin sees them live
+        if "$retrieve_backup" retrieve "$archive" >&"${YNH_STDINFO:-1}"; then
+            retrieved+=("$archive")
+        else
+            failed+=("$archive")
+        fi
+    done
+
+    if [ ${#failed[@]} -gt 0 ]; then
+        ynh_die "Retrieved ${#retrieved[@]} of ${#archives[@]} backups. Failed: ${failed[*]}. See the messages above."
     fi
 }
 

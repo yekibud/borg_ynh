@@ -3,8 +3,6 @@
 # Bridge between the Borg repository and YunoHost's local backup storage.
 #
 #   retrieve-backup list                 List the archives of the repository (`borg list --json` output)
-#   retrieve-backup choices [FILE|-]     Same, formatted as YAML choices for the config panel select.
-#                                        FILE (or - for stdin) holds a previous `list` output.
 #   retrieve-backup retrieve ARCHIVE     Materialize a Borg archive as a regular local YunoHost backup
 #
 # `retrieve` exports the archive as /home/yunohost.backup/archives/<name>.tar, next to the
@@ -43,7 +41,6 @@ usage() {
     cat << EOF
 Usage:
   $0 list                 List the archives of the Borg repository (JSON)
-  $0 choices [FILE|-]     List the archives as YAML choices for the config panel
   $0 retrieve ARCHIVE     Copy a Borg archive into YunoHost's local backups
 EOF
 }
@@ -74,50 +71,6 @@ setup_ssh_host_key_policy() {
 
 list_archives() {
     "$borg" list --json
-}
-
-# Turns `borg list --json` into the YAML a config panel getter returns for a `select`:
-# system parts first, then apps alphabetically, most recent first within each component.
-read -r -d '' choices_py << 'EOF' || true
-import json
-import re
-import sys
-
-import yaml
-
-# Archive names are "<yunohost backup name>-<borg {now} placeholder>", see the backup_method hook
-NOW_SUFFIX = re.compile(r"-\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$")
-SYSTEM_PARTS = {"conf": "System configuration", "data": "System data"}
-
-raw = sys.stdin.read()
-archives = json.loads(raw).get("archives", []) if raw.strip() else []
-entries = []
-for archive in archives:
-    base = NOW_SUFFIX.sub("", archive["name"])
-    if base.startswith("auto_"):
-        component = base[len("auto_"):]
-        group = 0 if component in SYSTEM_PARTS else 1
-        label = SYSTEM_PARTS.get(component, component)
-    else:
-        group, label = 2, base
-    when = archive["time"][:19].replace("T", " ")
-    entries.append((group, label.lower(), when, archive["name"], f"{label}: {when}"))
-
-entries.sort(key=lambda entry: entry[2], reverse=True)
-entries.sort(key=lambda entry: (entry[0], entry[1]))
-choices = {name: label for _, _, _, name, label in entries}
-print(yaml.safe_dump({"value": "", "choices": choices}, allow_unicode=True, sort_keys=False, width=float("inf")), end="")
-EOF
-
-print_choices() {
-    local source="${1:-}"
-    if [[ -z "$source" ]]; then
-        list_archives | python3 -c "$choices_py"
-    elif [[ "$source" == "-" ]]; then
-        python3 -c "$choices_py"
-    else
-        python3 -c "$choices_py" < "$source"
-    fi
 }
 
 # YunoHost backup names must match ^[\w\-\._]{1,50}(?<!\.)$ (see yunohost's share/actionsmap.yml):
@@ -215,10 +168,6 @@ case "${1:-}" in
     list)
         setup_ssh_host_key_policy
         list_archives
-        ;;
-    choices)
-        [[ -n "${2:-}" ]] || setup_ssh_host_key_policy
-        print_choices "${2:-}"
         ;;
     retrieve)
         [[ -n "${2:-}" ]] || die "Missing archive name. $(usage)"
